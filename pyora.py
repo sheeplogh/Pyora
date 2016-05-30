@@ -14,7 +14,6 @@ import re
 
 version = 0.2
 
-
 class Checks(object):
 
     def check_active(self):
@@ -370,16 +369,60 @@ class Checks(object):
 
     def tablespace(self, name):
         """Get tablespace usage"""
-        sql = "SELECT df.tablespace_name 'TABLESPACE',  ROUND ( (df.bytes -  \
-              SUM (fs.bytes)) * 100 / df.bytes, 2) 'USED' FROM  (SELECT \
-              TABLESPACE_NAME,BYTES FROM  sys.sm$ts_free fs UNION ALL SELECT \
-              TABLESPACE_NAME,FREE_SPACE \ FROM DBA_TEMP_FREE_SPACE ) FS, \
-              (SELECT tablespace_name, SUM (bytes) bytes FROM \
-              sys.sm$ts_avail GROUP BY \ tablespace_name UNION ALL SELECT \
-              TABLESPACE_NAME, SUM(bytes) FROM SYS.DBA_TEMP_FILES GROUP BY \
-              tablespace_name ) df \ WHERE fs.tablespace_name(+) = \
-              df.tablespace_name AND df.tablespace_name = '{0}' \
-              GROUP BY df.tablespace_name,df.bytes ORDER BY 1".format(name)
+        sql = "SELECT z.tablespace_name \"TABLESPACE\",  ROUND (((bytes - \
+              free_bytes) / (max_bytes)) * 100, 2) USED FROM \
+              (SELECT df.tablespace_name, SUM(df.bytes) bytes, \
+              SUM(f.free_bytes) free_bytes, SUM(DECODE(df.autoextensible, \
+              'YES', df.maxbytes, df.bytes)) max_bytes \
+              FROM dba_data_files df, (SELECT file_id, SUM(bytes) free_bytes \
+              FROM dba_free_space WHERE tablespace_name = '{0}' \
+              GROUP BY file_id) f WHERE df.file_id = f.file_id GROUP BY \
+              df.tablespace_name) z ORDER BY tablespace_name".format(name)
+        self.cur.execute(sql)
+        res = self.cur.fetchall()
+        for i in res:
+            print i[1]
+
+    def tablespace_maxsize(self, name):
+        """Get tablespace maxsize(byte)"""
+        sql = "SELECT z.tablespace_name \"TABLESPACE\", max_bytes FROM \
+              (SELECT df.tablespace_name, SUM(df.bytes) bytes, \
+              SUM(f.free_bytes) free_bytes, SUM(DECODE(df.autoextensible, \
+              'YES', df.maxbytes, df.bytes)) max_bytes \
+              FROM dba_data_files df, (SELECT file_id, SUM(bytes) free_bytes \
+              FROM dba_free_space WHERE tablespace_name = '{0}' \
+              GROUP BY file_id) f WHERE df.file_id = f.file_id GROUP BY \
+              df.tablespace_name) z ORDER BY tablespace_name".format(name)
+        self.cur.execute(sql)
+        res = self.cur.fetchall()
+        for i in res:
+            print i[1]
+
+    def tablespace_realsize(self, name):
+        """Get tablespace realsize(byte)"""
+        sql = "SELECT z.tablespace_name \"TABLESPACE\", bytes real_bytes FROM \
+              (SELECT df.tablespace_name, SUM(df.bytes) bytes, \
+              SUM(f.free_bytes) free_bytes, SUM(DECODE(df.autoextensible, \
+              'YES', df.maxbytes, df.bytes)) max_bytes \
+              FROM dba_data_files df, (SELECT file_id, SUM(bytes) free_bytes \
+              FROM dba_free_space WHERE tablespace_name = '{0}' \
+              GROUP BY file_id) f WHERE df.file_id = f.file_id GROUP BY \
+              df.tablespace_name) z ORDER BY tablespace_name".format(name)
+        self.cur.execute(sql)
+        res = self.cur.fetchall()
+        for i in res:
+            print i[1]
+
+    def tablespace_usedsize(self, name):
+        """Get tablespace usedsize(byte)"""
+        sql = "SELECT z.tablespace_name \"TABLESPACE\", (bytes - free_bytes) \
+              used_bytes FROM (SELECT df.tablespace_name, SUM(df.bytes) bytes, \
+              SUM(f.free_bytes) free_bytes, SUM(DECODE(df.autoextensible, \
+              'YES', df.maxbytes, df.bytes)) max_bytes \
+              FROM dba_data_files df, (SELECT file_id, SUM(bytes) free_bytes \
+              FROM dba_free_space WHERE tablespace_name = '{0}' \
+              GROUP BY file_id) f WHERE df.file_id = f.file_id GROUP BY \
+              df.tablespace_name) z ORDER BY tablespace_name".format(name)
         self.cur.execute(sql)
         res = self.cur.fetchall()
         for i in res:
@@ -387,7 +430,8 @@ class Checks(object):
 
     def show_tablespaces(self):
         """List tablespace names in a JSON like format for Zabbix use"""
-        sql = "SELECT tablespace_name FROM dba_tablespaces ORDER BY 1"
+        sql = "SELECT tablespace_name FROM dba_tablespaces WHERE CONTENTS != \
+              'TEMPORARY' ORDER BY 1"
         self.cur.execute(sql)
         res = self.cur.fetchall()
         key = ['{#TABLESPACE}']
@@ -400,8 +444,8 @@ class Checks(object):
     def show_tablespaces_temp(self):
         """List temporary tablespace names in a JSON like
         format for Zabbix use"""
-        sql = "SELECT tablespace FROM V$TEMPSEG_USAGE group by tablespace \
-              ORDER BY 1"
+        sql = "SELECT tablespace_name FROM dba_tablespaces WHERE CONTENTS = \
+              'TEMPORARY' ORDER BY 1"
         self.cur.execute(sql)
         res = self.cur.fetchall()
         key = ['{#TABLESPACE_TEMP}']
@@ -478,14 +522,48 @@ class Checks(object):
 
     def tablespace_temp(self, name):
         """Query temporary tablespaces"""
-        sql = "SELECT round(sum(a.blocks*8192)*100/bytes,2) percentual FROM \
-              V$TEMPSEG_USAGE a, dba_temp_files b where tablespace_name= \
-              '{0}' and a.tablespace=b.tablespace_name group by \
-              a.tablespace,b.bytes".format(name)
+        sql = "SELECT tablespace_name  \"TABLESPACE\", \
+              ROUND(SUM(bytes - user_bytes) / SUM(DECODE(autoextensible, 'YES', \
+              maxbytes, bytes))*100, 2) USED \
+              FROM dba_temp_files WHERE tablespace_name = '{0}' \
+              GROUP BY tablespace_name".format(name)
         self.cur.execute(sql)
         res = self.cur.fetchall()
         for i in res:
-            print i[0]
+            print i[1]
+
+    def tablespace_temp_realsize(self, name):
+        """Get temporary tablespace realsize(byte)"""
+        sql = "SELECT tablespace_name  \"TABLESPACE\", \
+              SUM(bytes) real_bytes \
+              FROM dba_temp_files WHERE tablespace_name = '{0}' \
+              GROUP BY tablespace_name".format(name)
+        self.cur.execute(sql)
+        res = self.cur.fetchall()
+        for i in res:
+            print i[1]
+
+    def tablespace_temp_maxsize(self, name):
+        """Get temporary tablespace maxsize(byte)"""
+        sql = "SELECT tablespace_name  \"TABLESPACE\", \
+              SUM(DECODE(autoextensible, 'YES', maxbytes, bytes)) max_bytes \
+              FROM dba_temp_files WHERE tablespace_name = '{0}' \
+              GROUP BY tablespace_name".format(name)
+        self.cur.execute(sql)
+        res = self.cur.fetchall()
+        for i in res:
+            print i[1]
+
+    def tablespace_temp_usedsize(self, name):
+        """Get temporary tablespace usedsize(byte)"""
+        sql = "select dt.TABLESPACE_NAME \"TABLESPACE\", \
+              (dt.ALLOCATED_SPACE - dt.free_space) used_bytes \
+              from DBA_TEMP_FREE_SPACE dt \
+              where dt.tablespace_name = '{0}'".format(name)
+        self.cur.execute(sql)
+        res = self.cur.fetchall()
+        for i in res:
+            print i[1]
 
     def query_sysmetrics(self, name):
         """Query v$sysmetric parameters"""
